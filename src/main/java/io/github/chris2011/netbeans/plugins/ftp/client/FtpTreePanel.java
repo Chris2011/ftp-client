@@ -2,6 +2,8 @@ package io.github.chris2011.netbeans.plugins.ftp.client;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -9,204 +11,298 @@ import java.util.List;
 import javax.swing.Icon;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTable;
 import javax.swing.JTree;
+import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
-import javax.swing.event.TreeExpansionEvent;
-import javax.swing.event.TreeWillExpandListener;
+import javax.swing.event.TreeSelectionEvent;
+import javax.swing.event.TreeSelectionListener;
+import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
-import javax.swing.tree.ExpandVetoException;
 import javax.swing.tree.TreePath;
-import org.openide.util.ImageUtilities;
 
 public class FtpTreePanel extends JPanel {
+
     private final FtpExplorerTopComponent parentComponent;
-    private JTree tree;
-    private DefaultTreeModel treeModel;
-    private DefaultMutableTreeNode rootNode;
-    
-    public FtpTreePanel(FtpExplorerTopComponent parent) {
-        this.parentComponent = parent;
-        initComponents();
-    }
-    
-    private void initComponents() {
+    private final JTree tree;
+    private final JTable table;
+    private final DefaultTreeModel treeModel;
+    private final FtpFileTableModel tableModel;
+    private final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("MMM dd, yyyy HH:mm");
+
+    public FtpTreePanel(FtpExplorerTopComponent parentComponent, org.openide.explorer.ExplorerManager explorerManager) {
+        this.parentComponent = parentComponent;
         setLayout(new BorderLayout());
-        
-        rootNode = new DefaultMutableTreeNode(new FtpFile("Root", "/", true));
+
+        // Create tree for navigation
+        DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("FTP Root");
         treeModel = new DefaultTreeModel(rootNode);
         tree = new JTree(treeModel);
-        
-        tree.setCellRenderer(new FtpTreeCellRenderer());
         tree.setRootVisible(true);
-        tree.setShowsRootHandles(true);
-        
-        tree.addTreeWillExpandListener(new TreeWillExpandListener() {
+        tree.setCellRenderer(new FtpTreeCellRenderer());
+
+        // Create table for file details
+        tableModel = new FtpFileTableModel();
+        table = new JTable(tableModel);
+        table.setRowHeight(22);
+        table.setDefaultRenderer(Object.class, new FtpFileTableCellRenderer());
+
+        // Configure column alignment
+        setupColumnAlignment();
+
+        // Add tree selection listener
+        tree.addTreeSelectionListener(new TreeSelectionListener() {
             @Override
-            public void treeWillExpand(TreeExpansionEvent event) throws ExpandVetoException {
-                TreePath path = event.getPath();
-                DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
-                loadChildren(node);
-            }
-            
-            @Override
-            public void treeWillCollapse(TreeExpansionEvent event) throws ExpandVetoException {
+            public void valueChanged(TreeSelectionEvent e) {
+                onTreeSelectionChanged();
             }
         });
-        
-        // Add double-click listener for file opening
-        tree.addMouseListener(new java.awt.event.MouseAdapter() {
+
+        // Add double-click to open files
+        table.addMouseListener(new MouseAdapter() {
             @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
+            public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() == 2) {
-                    TreePath path = tree.getPathForLocation(e.getX(), e.getY());
-                    if (path != null) {
-                        DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
-                        Object userObject = node.getUserObject();
-                        if (userObject instanceof FtpFile) {
-                            FtpFile file = (FtpFile) userObject;
-                            if (file.isFile()) {
-                                openFileInEditor(file);
-                            }
+                    int row = table.getSelectedRow();
+                    if (row >= 0) {
+                        FtpFile file = tableModel.getFileAt(row);
+                        if (file != null && file.isFile()) {
+                            FtpFileOpener.openFile(file, parentComponent.getFtpClient());
                         }
                     }
                 }
             }
         });
-        
-        JScrollPane scrollPane = new JScrollPane(tree);
-        add(scrollPane, BorderLayout.CENTER);
+
+        // Create split pane
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+        splitPane.setLeftComponent(new JScrollPane(tree));
+        splitPane.setRightComponent(new JScrollPane(table));
+        splitPane.setDividerLocation(250);
+        splitPane.setResizeWeight(0.3);
+
+        add(splitPane, BorderLayout.CENTER);
+        clear();
     }
-    
+
     public void refresh() {
         if (!parentComponent.isConnected()) {
             return;
         }
-        
-        rootNode.removeAllChildren();
-        loadChildren(rootNode);
-        treeModel.reload();
-        
-        SwingUtilities.invokeLater(() -> {
-            tree.expandPath(new TreePath(rootNode.getPath()));
-        });
+
+        try {
+            // Build tree structure
+            FtpFile rootFile = FtpFile.createRoot(parentComponent.getConnection().getDisplayName());
+            DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode(new FtpTreeNodeData(rootFile, "/"));
+            loadTreeChildren(rootNode, "/");
+
+            treeModel.setRoot(rootNode);
+            tree.expandRow(0); // Expand root
+
+            // Load root directory in table
+            List<FtpFile> files = parentComponent.listFiles("/");
+            tableModel.setFiles(files);
+        } catch (IOException e) {
+            e.printStackTrace();
+            clear();
+        }
     }
-    
+
     public void clear() {
-        rootNode.removeAllChildren();
-        treeModel.reload();
+        DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("Disconnected");
+        treeModel.setRoot(rootNode);
+        tableModel.setFiles(new ArrayList<>());
     }
-    
-    private void loadChildren(DefaultMutableTreeNode parentNode) {
-        if (parentNode.getChildCount() > 0) {
-            return;
+
+    private void loadTreeChildren(DefaultMutableTreeNode parentNode, String path) {
+        try {
+            List<FtpFile> files = parentComponent.listFiles(path);
+            for (FtpFile file : files) {
+                if (file.isDirectory()) {
+                    DefaultMutableTreeNode childNode = new DefaultMutableTreeNode(new FtpTreeNodeData(file, file.getPath()));
+                    parentNode.add(childNode);
+                    // Add dummy child for lazy loading
+                    childNode.add(new DefaultMutableTreeNode("Loading..."));
+                }
+            }
+        } catch (IOException e) {
+            // Ignore errors for tree building
         }
-        
-        Object userObject = parentNode.getUserObject();
-        if (!(userObject instanceof FtpFile)) {
-            return;
+    }
+
+    private void onTreeSelectionChanged() {
+        TreePath selectionPath = tree.getSelectionPath();
+        if (selectionPath != null) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode) selectionPath.getLastPathComponent();
+            Object userObject = node.getUserObject();
+
+            if (userObject instanceof FtpTreeNodeData) {
+                FtpTreeNodeData nodeData = (FtpTreeNodeData) userObject;
+                loadDirectoryInTable(nodeData.getPath());
+
+                // Lazy load children if needed
+                if (node.getChildCount() == 1 && "Loading...".equals(node.getFirstChild().toString())) {
+                    node.removeAllChildren();
+                    loadTreeChildren(node, nodeData.getPath());
+                    treeModel.nodeStructureChanged(node);
+                }
+            }
         }
-        
-        FtpFile parentFile = (FtpFile) userObject;
-        if (!parentFile.isDirectory()) {
-            return;
+    }
+
+    private void loadDirectoryInTable(String path) {
+        try {
+            List<FtpFile> files = parentComponent.listFiles(path);
+            tableModel.setFiles(files);
+        } catch (IOException e) {
+            e.printStackTrace();
+            tableModel.setFiles(new ArrayList<>());
         }
-        
-        SwingUtilities.invokeLater(() -> {
-            try {
-                List<FtpFile> files = parentComponent.listFiles(parentFile.getPath());
-                
-                List<FtpFile> directories = new ArrayList<>();
-                List<FtpFile> regularFiles = new ArrayList<>();
-                
-                for (FtpFile file : files) {
+    }
+
+    private void setupColumnAlignment() {
+        // Right-align all columns except the first one (Name)
+        DefaultTableCellRenderer rightRenderer = new DefaultTableCellRenderer();
+        rightRenderer.setHorizontalAlignment(SwingConstants.RIGHT);
+
+        // Apply to columns 1-4 (Size, Modified, Permissions, Owner)
+        for (int i = 1; i < 5; i++) {
+            table.getColumnModel().getColumn(i).setCellRenderer(rightRenderer);
+        }
+    }
+
+    private class FtpFileTableModel extends AbstractTableModel {
+        private final String[] columnNames = {"Name", "Size", "Modified", "Permissions", "Owner"};
+        private List<FtpFile> files = new ArrayList<>();
+
+        public void setFiles(List<FtpFile> files) {
+            this.files = new ArrayList<>(files);
+            fireTableDataChanged();
+        }
+
+        @Override
+        public int getRowCount() {
+            return files.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return columnNames.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return columnNames[column];
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            if (rowIndex >= files.size()) {
+                return "";
+            }
+
+            FtpFile file = files.get(rowIndex);
+            switch (columnIndex) {
+                case 0: // Name
+                    return file.getName();
+                case 1: // Size
+                    return file.isDirectory() ? "" : file.getFormattedSize();
+                case 2: // Modified
+                    return file.isRoot() ? "" : DATE_FORMATTER.format(file.getLastModified());
+                case 3: // Permissions
+                    return file.isRoot() ? "" : file.getPermissionsWithOctal();
+                case 4: // Owner
+                    return file.isRoot() ? "" : file.getOwnerDisplay();
+                default:
+                    return "";
+            }
+        }
+
+        public FtpFile getFileAt(int rowIndex) {
+            if (rowIndex >= 0 && rowIndex < files.size()) {
+                return files.get(rowIndex);
+            }
+            return null;
+        }
+    }
+
+    private class FtpFileTableCellRenderer extends DefaultTableCellRenderer {
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+            super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+
+            // Set icon for name column
+            if (column == 0) {
+                FtpFile file = tableModel.getFileAt(row);
+                if (file != null) {
                     if (file.isDirectory()) {
-                        directories.add(file);
+                        setIcon(FtpIcons.getFolderIcon());
                     } else {
-                        regularFiles.add(file);
+                        setIcon(FtpIcons.getFileIconByExtension(file.getName()));
                     }
                 }
-                
-                directories.sort((a, b) -> a.getName().compareToIgnoreCase(b.getName()));
-                regularFiles.sort((a, b) -> a.getName().compareToIgnoreCase(b.getName()));
-                
-                for (FtpFile dir : directories) {
-                    DefaultMutableTreeNode dirNode = new DefaultMutableTreeNode(dir);
-                    parentNode.add(dirNode);
-                }
-                
-                for (FtpFile file : regularFiles) {
-                    DefaultMutableTreeNode fileNode = new DefaultMutableTreeNode(file);
-                    parentNode.add(fileNode);
-                }
-                
-                treeModel.nodeStructureChanged(parentNode);
-                
-            } catch (IOException e) {
-                e.printStackTrace();
+            } else {
+                setIcon(null);
             }
-        });
+
+            return this;
+        }
     }
-    
-    private void openFileInEditor(FtpFile file) {
-        FtpFileOpener.openFile(file, parentComponent.getFtpClient());
-    }
-    
-    private static class FtpTreeCellRenderer extends DefaultTreeCellRenderer {
-        // private static final Icon FOLDER_ICON = ImageUtilities.loadImageIcon("io/github/chris2011/netbeans/plugins/ftp/client/folder.png", false);
-        // private static final Icon FILE_ICON = ImageUtilities.loadImageIcon("io/github/chris2011/netbeans/plugins/ftp/client/file.png", false);
-        // private static final Icon ROOT_ICON = ImageUtilities.loadImageIcon("io/github/chris2011/netbeans/plugins/ftp/client/server.png", false);
-        private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("MMM dd, yyyy HH:mm");
-        
+
+    // Helper class to store FtpFile data in tree nodes
+    private static class FtpTreeNodeData {
+        private final FtpFile file;
+        private final String path;
+
+        public FtpTreeNodeData(FtpFile file, String path) {
+            this.file = file;
+            this.path = path;
+        }
+
+        public FtpFile getFile() {
+            return file;
+        }
+
+        public String getPath() {
+            return path;
+        }
+
         @Override
-        public Component getTreeCellRendererComponent(JTree tree, Object value, boolean sel,
-                boolean expanded, boolean leaf, int row, boolean hasFocus) {
-            
+        public String toString() {
+            return file.getName();
+        }
+    }
+
+    // Custom tree cell renderer with icons
+    private class FtpTreeCellRenderer extends DefaultTreeCellRenderer {
+        @Override
+        public Component getTreeCellRendererComponent(JTree tree, Object value, boolean sel, boolean expanded, boolean leaf, int row, boolean hasFocus) {
             super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus);
-            
+
             if (value instanceof DefaultMutableTreeNode) {
                 DefaultMutableTreeNode node = (DefaultMutableTreeNode) value;
                 Object userObject = node.getUserObject();
-                
-                if (userObject instanceof FtpFile) {
-                    FtpFile file = (FtpFile) userObject;
-                    
-                    if (file.getPath().equals("/")) {
-                        // setIcon(ROOT_ICON);
-                        setText("FTP Root");
+
+                if (userObject instanceof FtpTreeNodeData) {
+                    FtpTreeNodeData nodeData = (FtpTreeNodeData) userObject;
+                    FtpFile file = nodeData.getFile();
+
+                    if (file.isDirectory()) {
+                        setIcon(FtpIcons.getFolderIcon());
                     } else {
-                        // setIcon(file.isDirectory() ? FOLDER_ICON : FILE_ICON);
-                        
-                        String displayText = file.getName();
-                        if (file.isFile()) {
-                            displayText += " (" + file.getFormattedSize() + ")";
-                        }
-                        setText(displayText);
+                        setIcon(FtpIcons.getConnectionIcon(parentComponent.isConnected()));
                     }
-                    
-                    setToolTipText(createTooltip(file));
+                } else {
+                    // Root or other nodes
+                    setIcon(FtpIcons.getConnectionIcon(parentComponent.isConnected()));
                 }
             }
-            
+
             return this;
-        }
-        
-        private String createTooltip(FtpFile file) {
-            StringBuilder tooltip = new StringBuilder("<html>");
-            tooltip.append("<b>").append(file.getName()).append("</b><br>");
-            tooltip.append("Path: ").append(file.getPath()).append("<br>");
-            tooltip.append("Type: ").append(file.isDirectory() ? "Directory" : "File").append("<br>");
-            
-            if (file.isFile()) {
-                tooltip.append("Size: ").append(file.getFormattedSize()).append("<br>");
-            }
-            
-            tooltip.append("Modified: ").append(file.getLastModified().format(DATE_FORMATTER)).append("<br>");
-            tooltip.append("Permissions: ").append(file.getPermissions());
-            tooltip.append("</html>");
-            
-            return tooltip.toString();
         }
     }
 }
