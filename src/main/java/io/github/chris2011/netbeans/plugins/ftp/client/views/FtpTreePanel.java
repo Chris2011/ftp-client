@@ -1,4 +1,9 @@
-package io.github.chris2011.netbeans.plugins.ftp.client;
+package io.github.chris2011.netbeans.plugins.ftp.client.views;
+
+import io.github.chris2011.netbeans.plugins.ftp.client.FtpExplorerTopComponent;
+import io.github.chris2011.netbeans.plugins.ftp.client.FtpFile;
+import io.github.chris2011.netbeans.plugins.ftp.client.FtpFileOpener;
+import io.github.chris2011.netbeans.plugins.ftp.client.FtpIcons;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -25,9 +30,8 @@ import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 
-public class FtpTreePanel extends JPanel {
+public class FtpTreePanel extends BaseViewPanel {
 
-    private final FtpExplorerTopComponent parentComponent;
     private final JTree tree;
     private final JTable table;
     private final DefaultTreeModel treeModel;
@@ -35,7 +39,7 @@ public class FtpTreePanel extends JPanel {
     private final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("MMM dd, yyyy HH:mm");
 
     public FtpTreePanel(FtpExplorerTopComponent parentComponent, org.openide.explorer.ExplorerManager explorerManager) {
-        this.parentComponent = parentComponent;
+        super(parentComponent);
         setLayout(new BorderLayout());
 
         // Create tree for navigation
@@ -90,7 +94,7 @@ public class FtpTreePanel extends JPanel {
     }
 
     public void refresh() {
-        if (!parentComponent.isConnected()) {
+        if (!isConnected()) {
             return;
         }
 
@@ -104,7 +108,7 @@ public class FtpTreePanel extends JPanel {
             tree.expandRow(0); // Expand root
 
             // Load root directory in table
-            List<FtpFile> files = parentComponent.listFiles("/");
+            List<FtpFile> files = listFiles("/");
             tableModel.setFiles(files);
         } catch (IOException e) {
             e.printStackTrace();
@@ -120,7 +124,7 @@ public class FtpTreePanel extends JPanel {
 
     private void loadTreeChildren(DefaultMutableTreeNode parentNode, String path) {
         try {
-            List<FtpFile> files = parentComponent.listFiles(path);
+            List<FtpFile> files = listFiles(path);
             for (FtpFile file : files) {
                 if (file.isDirectory()) {
                     DefaultMutableTreeNode childNode = new DefaultMutableTreeNode(new FtpTreeNodeData(file, file.getPath()));
@@ -156,7 +160,7 @@ public class FtpTreePanel extends JPanel {
 
     private void loadDirectoryInTable(String path) {
         try {
-            List<FtpFile> files = parentComponent.listFiles(path);
+            List<FtpFile> files = listFiles(path);
             tableModel.setFiles(files);
         } catch (IOException e) {
             e.printStackTrace();
@@ -294,11 +298,11 @@ public class FtpTreePanel extends JPanel {
                     if (file.isDirectory()) {
                         setIcon(FtpIcons.getFolderIcon());
                     } else {
-                        setIcon(FtpIcons.getConnectionIcon(parentComponent.isConnected()));
+                        setIcon(FtpIcons.getConnectionIcon(isConnected()));
                     }
                 } else {
                     // Root or other nodes
-                    setIcon(FtpIcons.getConnectionIcon(parentComponent.isConnected()));
+                    setIcon(FtpIcons.getConnectionIcon(isConnected()));
                 }
             }
 

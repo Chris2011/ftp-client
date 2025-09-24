@@ -6,6 +6,7 @@ import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import javax.swing.AbstractAction;
 import javax.swing.Action;
+import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import org.openide.nodes.AbstractNode;
 import org.openide.nodes.Children;
@@ -21,8 +22,9 @@ public class FtpConnectionNode extends AbstractNode {
 
     private final Action openExplorerAction = new OpenExplorerAction();
     private final Action connectAndOpenAction = new ConnectAndOpenAction();
-    private final Action disconnectAction = new DisconnectAction();
     private final PropertyChangeListener connectionListener = this::onConnectionPropertyChange;
+
+    private final FtpClient ftpClient;
 
     public FtpConnectionNode(FtpConnection connection) {
         super(Children.LEAF, Lookups.singleton(connection));
@@ -31,6 +33,8 @@ public class FtpConnectionNode extends AbstractNode {
         setDisplayName(connection.getDisplayName());
         connection.addPropertyChangeListener(WeakListeners.propertyChange(connectionListener, connection));
         updatePresentation();
+
+        ftpClient = FtpClient.getInstance(connection);
     }
 
     @Override
@@ -38,7 +42,7 @@ public class FtpConnectionNode extends AbstractNode {
         if (connection.isConnected()) {
             return new Action[]{
                 openExplorerAction,
-                disconnectAction,
+                new DisconnectAction(),
                 null,
                 new EditConnectionAction(),
                 new RemoveConnectionAction()
@@ -155,21 +159,25 @@ public class FtpConnectionNode extends AbstractNode {
                 .findTopComponent(FtpExplorerTopComponent.preferredIdFor(connection));
 
             if (existingTc instanceof FtpExplorerTopComponent) {
-                // Window exists, update connection in explorer and trigger reconnection
-                FtpExplorerTopComponent explorer = (FtpExplorerTopComponent) existingTc;
+                // Window exists, bring it to front
                 existingTc.requestActive();
-
-                // Update the explorer's connection with current password
-                explorer.updateConnection(connection);
-
-                // Trigger reconnection in the existing window
-                SwingUtilities.invokeLater(() -> {
-                    explorer.reconnect();
-                });
             } else {
                 // No existing window, open new one
                 FtpExplorerTopComponent.openForConnection(connection);
             }
+
+            // Always connect via singleton - events will handle UI updates in all open windows
+            FtpClient client = FtpClient.getInstance(connection);
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    client.connect();
+                } catch (Exception ex) {
+                    JOptionPane.showMessageDialog(null,
+                        "Connection failed: " + ex.getMessage(),
+                        "Connection Error",
+                        JOptionPane.ERROR_MESSAGE);
+                }
+            });
         }
     }
 
@@ -219,14 +227,8 @@ public class FtpConnectionNode extends AbstractNode {
         @Override
         public void actionPerformed(ActionEvent e) {
             if (connection.isConnected()) {
-                // Find the associated TopComponent and disconnect through it
-                TopComponent tc = WindowManager.getDefault()
-                    .findTopComponent(FtpExplorerTopComponent.preferredIdFor(connection));
-                if (tc instanceof FtpExplorerTopComponent) {
-                    FtpExplorerTopComponent explorer = (FtpExplorerTopComponent) tc;
-                    explorer.getFtpClient().disconnect();
-                    connection.setConnected(false);
-                }
+                // Simply disconnect via singleton client - events will handle UI updates
+                FtpClient.getInstance(connection).disconnect();
             }
         }
     }
@@ -244,6 +246,8 @@ public class FtpConnectionNode extends AbstractNode {
                 tc.close();
             }
 
+            // Remove singleton instance
+            FtpClient.removeInstance(connection);
             FtpConnectionManager.getInstance().removeConnection(connection);
         }
     }

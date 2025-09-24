@@ -1,6 +1,10 @@
 package io.github.chris2011.netbeans.plugins.ftp.client;
 
+import io.github.chris2011.netbeans.plugins.ftp.client.views.FtpTreePanel;
+import io.github.chris2011.netbeans.plugins.ftp.client.views.MillerColumnsPanel;
 import java.awt.BorderLayout;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
 import java.awt.CardLayout;
 import java.io.IOException;
 import java.util.List;
@@ -20,7 +24,7 @@ import org.openide.util.RequestProcessor;
 import org.openide.windows.TopComponent;
 import org.openide.windows.WindowManager;
 
-public class FtpExplorerTopComponent extends TopComponent implements ExplorerManager.Provider {
+public class FtpExplorerTopComponent extends TopComponent implements ExplorerManager.Provider, PropertyChangeListener {
 
     private static final String MILLER_VIEW = "miller";
     private static final String TREE_VIEW = "tree";
@@ -46,7 +50,7 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
 
     public FtpExplorerTopComponent(FtpConnection connection) {
         this.connection = connection;
-        this.ftpClient = new FtpClient(connection);
+        this.ftpClient = FtpClient.getInstance(connection);
 
         setName(connection.getName());
         setDisplayName("FTP: " + connection.getDisplayName());
@@ -55,7 +59,12 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
         initComponents();
         associateLookup(ExplorerUtils.createLookup(explorerManager, getActionMap()));
         updateWindowMetadata();
-        connectToServer();
+
+        // Listen to FtpClient events
+        ftpClient.addPropertyChangeListener(this);
+
+        // Don't auto-connect here - let external callers decide when to connect
+        // connectToServer();
     }
 
     public static TopComponent openForConnection(FtpConnection connection) {
@@ -77,6 +86,16 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
         TopComponent tc = new FtpExplorerTopComponent(connection);
         tc.open();
         tc.requestActive();
+
+        // Auto-connect when opening a new TopComponent
+        SwingUtilities.invokeLater(() -> {
+            try {
+                FtpClient.getInstance(connection).connect();
+            } catch (Exception e) {
+                // Connection will be handled by event system
+            }
+        });
+
         return tc;
     }
 
@@ -145,14 +164,9 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
 
         RP.post(() -> {
             try {
-                boolean connectedNow = ftpClient.connect();
+                ftpClient.connect(); // FtpClient will fire events automatically
                 SwingUtilities.invokeLater(() -> {
                     handle.finish();
-                    if (connectedNow) {
-                        handleSuccessfulConnection();
-                    } else {
-                        handleConnectionFailure("Failed to connect to FTP server");
-                    }
                 });
             } catch (IOException ex) {
                 SwingUtilities.invokeLater(() -> {
@@ -164,12 +178,8 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
     }
 
     private void handleSuccessfulConnection() {
-        isConnected = true;
-        connectButton.setEnabled(false);
-        disconnectButton.setEnabled(true);
-
-        refreshCurrentView();
-
+        // This method is now only called from the old connectToServer method
+        // The actual UI updates are handled by the propertyChange listener
         StatusDisplayer.getDefault().setStatusText("Connected to " + connection.getDisplayName());
         NotificationDisplayer.getDefault().notify(
             "FTP Connection",
@@ -178,8 +188,6 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
             null,
             NotificationDisplayer.Priority.LOW
         );
-        connection.setConnected(true);
-        updateWindowMetadata();
     }
 
     private void handleConnectionFailure(String message) {
@@ -201,7 +209,7 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
         connection.setSalt(updatedConnection.getSalt());
 
         // Update the FTP client with new connection details
-        this.ftpClient = new FtpClient(connection);
+        this.ftpClient = FtpClient.getInstance(connection);
     }
 
     public void reconnect() {
@@ -222,14 +230,18 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
         connectToServer();
     }
 
-    private void disconnectFromServer() {
+    public void disconnectFromServer() {
         ftpClient.disconnect();
         isConnected = false;
         connectButton.setEnabled(true);
         disconnectButton.setEnabled(false);
 
+        // Clear all views completely
         millerPanel.clear();
         treePanel.clear();
+
+        // Reset views to show they are disconnected
+        refreshCurrentView();
 
         StatusDisplayer.getDefault().setStatusText("Disconnected from " + connection.getDisplayName());
         connection.setConnected(false);
@@ -255,10 +267,12 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
     }
 
     private void refreshCurrentView() {
-        if (millerViewButton.isSelected()) {
-            millerPanel.refresh();
-        } else {
-            treePanel.refresh();
+        if (isConnected) {
+            if (millerViewButton.isSelected()) {
+                millerPanel.refresh();
+            } else {
+                treePanel.refresh();
+            }
         }
     }
 
@@ -290,7 +304,45 @@ public class FtpExplorerTopComponent extends TopComponent implements ExplorerMan
     @Override
     protected void componentClosed() {
         super.componentClosed();
+        ftpClient.removePropertyChangeListener(this);
         disconnectFromServer();
+    }
+
+    @Override
+    public void propertyChange(PropertyChangeEvent evt) {
+        if (FtpClient.PROP_CONNECTED.equals(evt.getPropertyName())) {
+            // FtpClient connected event
+            SwingUtilities.invokeLater(() -> {
+                isConnected = true;
+                connectButton.setEnabled(false);
+                disconnectButton.setEnabled(true);
+                refreshCurrentView();
+                updateWindowMetadata();
+
+                // Show notification
+                StatusDisplayer.getDefault().setStatusText("Connected to " + connection.getDisplayName());
+                NotificationDisplayer.getDefault().notify(
+                    "FTP Connection",
+                    FtpIcons.getNotificationIcon(),
+                    "Connected to " + connection.getDisplayName(),
+                    null,
+                    NotificationDisplayer.Priority.LOW
+                );
+            });
+        } else if (FtpClient.PROP_DISCONNECTED.equals(evt.getPropertyName())) {
+            // FtpClient disconnected event
+            SwingUtilities.invokeLater(() -> {
+                isConnected = false;
+                connectButton.setEnabled(true);
+                disconnectButton.setEnabled(false);
+                millerPanel.clear();
+                treePanel.clear();
+                refreshCurrentView();
+                updateWindowMetadata();
+
+                StatusDisplayer.getDefault().setStatusText("Disconnected from " + connection.getDisplayName());
+            });
+        }
     }
 
     @Override

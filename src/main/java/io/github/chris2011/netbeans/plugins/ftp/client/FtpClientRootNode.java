@@ -30,6 +30,7 @@ public class FtpClientRootNode extends AbstractNode {
             Lookups.singleton(FtpConnectionManager.getInstance()));
         setName("FTP Client");
         setDisplayName("FTP Client");
+        setIconBaseWithExtension("/io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg");
     }
 
     @Override
@@ -70,6 +71,9 @@ public class FtpClientRootNode extends AbstractNode {
         @Override
         public void propertyChange(PropertyChangeEvent evt) {
             if (FtpConnectionManager.PROP_CONNECTIONS_CHANGED.equals(evt.getPropertyName())) {
+                refresh(false);
+            } else if (FtpConnectionManager.PROP_CONNECTION_STATE_CHANGED.equals(evt.getPropertyName())) {
+                // Connection state changed - refresh to update node display
                 refresh(false);
             }
         }

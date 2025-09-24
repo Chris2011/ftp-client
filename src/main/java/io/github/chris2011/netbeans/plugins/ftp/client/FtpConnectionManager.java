@@ -20,6 +20,7 @@ import org.openide.awt.NotificationDisplayer;
 public class FtpConnectionManager {
 
     public static final String PROP_CONNECTIONS_CHANGED = "connectionsChanged";
+    public static final String PROP_CONNECTION_STATE_CHANGED = "connectionStateChanged";
 
     private static FtpConnectionManager instance;
     private final List<FtpConnection> connections;
@@ -82,6 +83,10 @@ public class FtpConnectionManager {
 
     public void fireConnectionsChanged() {
         pcs.firePropertyChange(PROP_CONNECTIONS_CHANGED, null, connections);
+    }
+
+    public void fireConnectionStateChanged(FtpConnection connection) {
+        pcs.firePropertyChange(PROP_CONNECTION_STATE_CHANGED, null, connection);
     }
 
     public void addPropertyChangeListener(PropertyChangeListener listener) {
