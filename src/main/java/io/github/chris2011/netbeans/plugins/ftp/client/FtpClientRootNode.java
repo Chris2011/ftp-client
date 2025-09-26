@@ -13,7 +13,6 @@ import org.openide.nodes.ChildFactory;
 import org.openide.nodes.Children;
 import org.openide.nodes.Node;
 import org.openide.util.ImageUtilities;
-import org.openide.util.lookup.Lookups;
 import org.openide.util.lookup.ServiceProvider;
 
 @ServiceProvider(service = Node.class, path = "Services", position = 100)
@@ -21,21 +20,25 @@ import org.openide.util.lookup.ServiceProvider;
     name = "FtpClientRootNode",
     displayName = "FTP Client",
     shortDescription = "See all FTP Client connections",
-    iconResource = "/io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg",
-    position = 2021)
+    iconResource = "io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg",
+    position = 2050)
 public class FtpClientRootNode extends AbstractNode {
 
     public FtpClientRootNode() {
-        super(Children.create(new FtpConnectionChildFactory(), true),
-            Lookups.singleton(FtpConnectionManager.getInstance()));
+        super(Children.LEAF);
         setName("FTP Client");
         setDisplayName("FTP Client");
-        setIconBaseWithExtension("/io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg");
+        setIconBaseWithExtension("io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg");
+
+        // Initialize children after construction
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            setChildren(Children.create(new FtpConnectionChildFactory(), true));
+        });
     }
 
     @Override
     public Image getOpenedIcon(int type) {
-        return ImageUtilities.loadImage("/io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg");
+        return ImageUtilities.loadImage("io/github/chris2011/netbeans/plugins/ftp/client/ftp_client.svg");
     }
 
     @Override
@@ -49,17 +52,20 @@ public class FtpClientRootNode extends AbstractNode {
         implements PropertyChangeListener {
 
         public FtpConnectionChildFactory() {
+            System.out.println("FtpConnectionChildFactory: Constructor called");
             FtpConnectionManager manager = FtpConnectionManager.getInstance();
             manager.addPropertyChangeListener(this);
-            // Trigger initial refresh in case connections were already loaded
-            javax.swing.SwingUtilities.invokeLater(() -> {
-                manager.fireConnectionsChanged();
-            });
+            System.out.println("FtpConnectionChildFactory: Property listener added, manager has " + manager.getConnections().size() + " connections");
         }
 
         @Override
         protected boolean createKeys(List<FtpConnection> toPopulate) {
-            toPopulate.addAll(FtpConnectionManager.getInstance().getConnections());
+            List<FtpConnection> connections = FtpConnectionManager.getInstance().getConnections();
+            System.out.println("FtpConnectionChildFactory.createKeys(): Found " + connections.size() + " connections");
+            for (FtpConnection conn : connections) {
+                System.out.println("  - Connection: " + conn.getName() + " (" + conn.getId() + ")");
+            }
+            toPopulate.addAll(connections);
             return true;
         }
 

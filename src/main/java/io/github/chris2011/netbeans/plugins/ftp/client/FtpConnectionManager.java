@@ -28,6 +28,7 @@ public class FtpConnectionManager {
     private final Path configFile;
 
     private FtpConnectionManager() {
+        System.out.println("FtpConnectionManager: Constructor called");
         this.connections = new ArrayList<>();
         this.pcs = new PropertyChangeSupport(this);
 
@@ -35,6 +36,7 @@ public class FtpConnectionManager {
         String userHome = System.getProperty("user.home");
         Path configDir = Paths.get(userHome, ".netbeans", "ftp-client");
         this.configFile = configDir.resolve("connections.json");
+        System.out.println("FtpConnectionManager: Config file path: " + configFile);
 
         try {
             Files.createDirectories(configDir);
@@ -43,6 +45,7 @@ public class FtpConnectionManager {
         }
 
         loadConnections();
+        System.out.println("FtpConnectionManager: Constructor finished, " + connections.size() + " connections loaded");
     }
 
     public static synchronized FtpConnectionManager getInstance() {
@@ -98,7 +101,9 @@ public class FtpConnectionManager {
     }
 
     private void loadConnections() {
+        System.out.println("FtpConnectionManager.loadConnections(): Checking for config file: " + configFile);
         if (!Files.exists(configFile)) {
+            System.out.println("FtpConnectionManager.loadConnections(): No config file found");
             return; // No config file yet
         }
 
@@ -109,10 +114,12 @@ public class FtpConnectionManager {
                 json.append(line);
             }
 
+            System.out.println("FtpConnectionManager.loadConnections(): Read JSON: " + json.toString());
+
             if (json.length() > 0) {
                 parseConnections(json.toString());
                 // Fire property change to notify UI about loaded connections
-                System.out.println("Loaded " + connections.size() + " connections from file");
+                System.out.println("FtpConnectionManager.loadConnections(): Loaded " + connections.size() + " connections from file");
                 pcs.firePropertyChange(PROP_CONNECTIONS_CHANGED, null, connections);
             }
         } catch (IOException e) {
@@ -205,6 +212,7 @@ public class FtpConnectionManager {
                         conn.setSalt(salt);
 
                         connections.add(conn);
+                        System.out.println("FtpConnectionManager.parseConnections(): Added connection: " + name + " (ID: " + id + ")");
                     }
                 } catch (NumberFormatException e) {
                     System.err.println("Failed to parse connection: " + e.getMessage());
